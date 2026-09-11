@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Construction Advisor — SCE Envelope Designer</title>
+<title>CA App — SCE Envelope Designer</title>
 <style>
 :root{
   --bg:#ffffff;
@@ -70,7 +70,10 @@ header{
 
 /* ---------- Tabs ---------- */
 nav.tabs{border-bottom:1px solid var(--line); background:#fff}
-.tabs-inner{display:flex; gap:2px; padding:0 24px; max-width:1680px; margin:0 auto; overflow-x:auto}
+.tabs-row{display:flex; align-items:stretch; gap:12px; max-width:1680px; margin:0 auto; padding:0 24px}
+.tabs-inner{display:flex; gap:2px; overflow-x:auto; flex:1 1 auto; min-width:0}
+.tabs-actions{display:flex; gap:6px; align-items:center; flex:0 0 auto; padding-left:10px; border-left:1px solid var(--line2)}
+.tabs-actions .btn{font-size:11.5px; padding:5px 10px; white-space:nowrap}
 .tab{
   appearance:none; background:none; border:none; font:inherit; font-size:13px;
   color:var(--muted); padding:11px 14px; cursor:pointer; white-space:nowrap;
@@ -382,7 +385,6 @@ footer{border-top:1px solid var(--line); margin-top:26px; background:var(--wash)
     <div class="filechip sitechip" id="sitechip">
       <span class="loc" id="chipLoc"></span>
       <span class="meta" id="chipMeta"></span>
-      <button class="btn" id="btnReload" data-t="btnReload">Change the site</button>
     </div>
     <div class="langsel" id="langsel" role="group" aria-label="Language / Idioma">
       <button type="button" data-lang="en" aria-pressed="true" title="English">EN</button>
@@ -390,9 +392,16 @@ footer{border-top:1px solid var(--line); margin-top:26px; background:var(--wash)
     </div>
   </div>
   <nav class="tabs" id="tabsNav" hidden>
-    <div class="tabs-inner" role="tablist" id="tablist"></div>
+    <div class="tabs-row">
+      <div class="tabs-inner" role="tablist" id="tablist"></div>
+      <div class="tabs-actions">
+        <button class="btn" id="btnSave" data-t="btnSave" title="Save your progress as a file">Save</button>
+        <button class="btn" id="btnRestart" data-t="btnRestart" title="Discard this assessment and start a new one">Restart</button>
+      </div>
+    </div>
   </nav>
 </header>
+<input type="file" id="fileLoad" accept="application/json,.json" hidden>
 
 <main>
   <div id="empty">
@@ -446,6 +455,7 @@ footer{border-top:1px solid var(--line); margin-top:26px; background:var(--wash)
       <div class="cta">
         <span class="zonechip" id="zonePreview">— · —</span>
         <button class="btn solid" id="btnGo" data-t="btnGo">Work through the envelope</button>
+        <button class="btn" id="btnLoadSetup" data-t="btnLoadSetup">Continue a saved assessment</button>
       </div>
     </div>
 
@@ -537,7 +547,8 @@ footer{border-top:1px solid var(--line); margin-top:26px; background:var(--wash)
 /* ------------------------------------------------------------ 0. IDENTITY -- */
 const APP = {
   name:        'Construction Advisor',
-  version:     '1.1.3',
+  tabName:     'CA App',   // short name for the browser tab, which truncates the full one
+  version:     '1.3.0',
   author:      'Nuno Dinis Cortiços',
   institution: 'Lisbon School of Architecture, Universidade de Lisboa',
   builtWith:   'Claude Opus 5 (Anthropic)',
@@ -2091,7 +2102,7 @@ const IAQ_VENT_DEFAULT = { kitchen:100, bathroom:45 };
    ====================================================================== */
 
 /** The whole of the application's state. There is no file and no upload. */
-const STATE = { site:null, zone:null, tab:null };
+const STATE = { site:null, zone:null, tab:null, autoAltKey:null };
 
 /**
  * Altitude correction, Manual SCE Eq. 2:
@@ -5044,6 +5055,136 @@ function glossBind(root) {
   root.addEventListener('keydown', ev => { if (ev.key === 'Escape') hideTip(); });
 }
 
+/* ------------------------------------------------------- 6b. SESSION -- */
+/**
+ * Everything a student has entered, gathered into one small file they can
+ * save and reopen later. Every editable state object in the app is already
+ * plain data — layers, dimensions, choices, nothing that isn't a number,
+ * string or plain object — so the whole assessment round-trips through
+ * JSON without needing a bespoke format. A JSON file is what "open it back
+ * up and continue" actually needs to be reliable; a Markdown export could
+ * describe the assessment but could not be read back into it.
+ */
+const STATE_REGISTRY = {
+  ROOF_STATE, WEXT_STATE, WINT_STATE, PAV_STATE, VENT_STATE,
+  FLR_STATE, WIN_STATE, SHD_STATE, IAQ_STATE, IAQ_VENT_STATE
+};
+
+/* A pristine copy of every state object, taken once at load, before a
+   student has touched anything — so Restart has something to go back to
+   without a second, hand-maintained list of defaults that could drift out
+   of step with the real ones. */
+const STATE_DEFAULTS = {};
+for (const k in STATE_REGISTRY) STATE_DEFAULTS[k] = JSON.parse(JSON.stringify(STATE_REGISTRY[k]));
+
+function resetAllState() {
+  for (const k in STATE_REGISTRY) {
+    const obj = STATE_REGISTRY[k];
+    for (const f in obj) delete obj[f];
+    Object.assign(obj, JSON.parse(JSON.stringify(STATE_DEFAULTS[k])));
+  }
+}
+
+function collectSession() {
+  /* A snapshot, not a reference — collectSession() can be called long
+     before the file is actually written (or, as a live JS object, handed
+     straight to applySession() for a same-tab round trip), and either way
+     it has to survive a Restart or further editing happening in between. */
+  const state = {};
+  for (const k in STATE_REGISTRY) state[k] = JSON.parse(JSON.stringify(STATE_REGISTRY[k]));
+  return { app: APP.name, version: APP.version, savedAt: new Date().toISOString(),
+           site: JSON.parse(JSON.stringify(STATE.site)), tab: STATE.tab, state };
+}
+
+function saveSession() {
+  if (!STATE.site) { toast('Nothing to save yet'); return; }
+  const name = slugify(sitePrefix() + 'progress') + '.json';
+  download(new Blob([JSON.stringify(collectSession(), null, 2)], { type:'application/json' }), name);
+  toast('Progress saved');
+}
+
+/** Reflects a site onto the setup form through the same events initSetup()
+ *  already listens for, rather than reaching into its closure — the form
+ *  has no other way to be told about a site chosen from outside itself. */
+function reflectSiteOnSetupForm(site) {
+  const conc = $('#selConc'), alt = $('#inpAlt'), use = $('#selUse');
+  conc.value = site.conc || site.nuts;
+  conc.dispatchEvent(new Event('input', { bubbles:true }));
+  alt.value = site.alt;
+  alt.dispatchEvent(new Event('input', { bubbles:true }));
+  use.value = site.use || 'hab';
+  $$('#segOp button').forEach(b =>
+    b.setAttribute('aria-pressed', b.dataset.op === (site.operation || 'new') ? 'true' : 'false'));
+}
+
+/** 'ok', 'wrong-app' or 'bad-data' — never throws, so a hand-edited or
+ *  unrelated JSON file gives a clear toast instead of a blank page. */
+function applySession(data) {
+  if (!data || typeof data !== 'object' || data.app !== APP.name) return 'wrong-app';
+  if (!data.site || !data.state || !classify(data.site.nuts, data.site.alt)) return 'bad-data';
+  resetAllState();
+  for (const k in STATE_REGISTRY)
+    if (data.state[k] && typeof data.state[k] === 'object') Object.assign(STATE_REGISTRY[k], data.state[k]);
+  reflectSiteOnSetupForm(data.site);
+  mountApp(data.site, data.tab);
+  return 'ok';
+}
+
+function loadSessionFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    let data;
+    try { data = JSON.parse(reader.result); }
+    catch (e) { toast('That file could not be read'); return; }
+    const result = applySession(data);
+    if (result === 'wrong-app') toast('That is not a ' + APP.name + ' file');
+    else if (result === 'bad-data') toast('That file is missing information this needs');
+    else toast('Progress restored');
+  };
+  reader.onerror = () => toast('That file could not be read');
+  reader.readAsText(file);
+}
+
+function restartAssessment() {
+  resetAllState();
+  STATE.site = null;
+  STATE.tab = null;
+  STATE.autoAltKey = null;
+
+  const conc = $('#selConc'), alt = $('#inpAlt'), use = $('#selUse');
+  conc.value = '';
+  conc.dispatchEvent(new Event('input', { bubbles:true }));
+  alt.value = '100';
+  alt.dispatchEvent(new Event('input', { bubbles:true }));
+  use.value = 'hab';
+  $$('#segOp button').forEach(b => b.setAttribute('aria-pressed', b.dataset.op === 'new' ? 'true' : 'false'));
+
+  $('#app').hidden = true;
+  $('#empty').hidden = false;
+  $('#tabsNav').hidden = true;
+  $('#sitechip').classList.remove('on');
+  document.title = APP.tabName + (LANG === 'pt' ? ' — Desenho da envolvente pelo SCE' : ' — SCE Envelope Designer');
+  window.scrollTo(0, 0);
+  toast('Assessment reset');
+}
+
+const fileLoad = $('#fileLoad');
+/* The only way to reach this input is the setup screen's own button, which
+   is only ever visible before a site has been mounted (Restart is what
+   gets a student back there, and it clears STATE.site on the way) — so
+   there is never an in-progress assessment for a load to silently discard,
+   and nothing here needs to ask first. */
+function triggerLoad() { fileLoad.value = ''; fileLoad.click(); }
+fileLoad.addEventListener('change', () => {
+  const f = fileLoad.files && fileLoad.files[0];
+  if (f) loadSessionFile(f);
+});
+$('#btnSave').addEventListener('click', saveSession);
+$('#btnLoadSetup').addEventListener('click', triggerLoad);
+$('#btnRestart').addEventListener('click', () => {
+  if (confirm(t('Discard the current assessment and start over?'))) restartAssessment();
+});
+
 /* --------------------------------------------------------------- 7. BOOT -- */
 const TABS = [
   { key:'climate',   label:'Climate',        build:buildClimate },
@@ -5185,13 +5326,29 @@ function initSetup() {
     sub.textContent = hit + ' → ' + list.join(' / ');
     go.disabled = false;
 
+    const R = NUTS3[nuts];
+    const range = altRangeFor(hit, nuts);
+
+    /* The first time this exact (municipality, region) resolves, seed the
+       altitude field with the region's own reference altitude — clamped to
+       this municipality's known range, since the two don't always agree:
+       zref is the NUTS III's reference point, not necessarily anywhere
+       near this specific place (16 of 306 municipalities have a zref
+       outside their own DGT-recorded range). A student can still overwrite
+       it; this only fires once per newly-picked site, never on top of a
+       value they've since typed themselves. */
+    const autoKey = hit + '|' + nuts;
+    if (autoKey !== STATE.autoAltKey) {
+      STATE.autoAltKey = autoKey;
+      const seed = range ? clamp(R.zref, range[0], range[1]) : R.zref;
+      alt.value = String(Math.round(seed));
+    }
+
     const Z = classify(nuts, +alt.value || 0);
     if (!Z) { preview.textContent = '— · —'; go.disabled = true; return; }
     preview.innerHTML = '<b>' + Z.wz + ' ' + Z.sz + '</b> <small>'
       + fmt(Z.GD, 0) + ' °C·d · ' + fmt(Z.tv, 1) + ' °C · ' + t(REGION_NAME[Z.region]) + '</small>';
-    const R = NUTS3[nuts];
     const altVal = +alt.value || 0;
-    const range = altRangeFor(hit, nuts);
     let altText = t('Reference altitude of this region') + ': ' + fmt(R.zref, 0) + ' m. '
       + t('Metres above sea level, at the building.');
     let altBad = false;
@@ -5326,7 +5483,7 @@ function mountApp(site, keepTab) {
   $('#chipLoc').textContent = site.conc || site.nuts;
   $('#chipMeta').innerHTML = site.nuts + ' · ' + fmt(site.alt, 0) + ' m '
     + '<span class="zn">' + STATE.zone.wz + ' ' + STATE.zone.sz + '</span>';
-  document.title = APP.name + ' — ' + (site.conc || site.nuts);
+  document.title = APP.tabName + ' — ' + (site.conc || site.nuts);
 
   const tl = $('#tablist'); tl.innerHTML = '';
   TABS.forEach((tab, i) => {
@@ -5369,15 +5526,6 @@ window.addEventListener('resize', () => {
   mountApp._t = setTimeout(redrawVisiblePanels, 180);
 });
 
-$('#btnReload').addEventListener('click', () => {
-  $('#app').hidden = true;
-  $('#empty').hidden = false;
-  $('#tabsNav').hidden = true;
-  $('#sitechip').classList.remove('on');
-  document.title = APP.name + ' — ' + (LANG === 'pt' ? 'Desenho da envolvente pelo SCE' : 'SCE Envelope Designer');
-  window.scrollTo(0, 0);
-});
-
 /* --- static markup and language -------------------------------------------- */
 function applyStatic() {
   $$('[data-t]').forEach(n => {
@@ -5397,8 +5545,8 @@ function setLanguage(lang) {
   applyLanguage();
   applyStatic();
   $$('#langsel button').forEach(b => b.setAttribute('aria-pressed', b.dataset.lang === lang ? 'true' : 'false'));
-  document.title = STATE.site ? APP.name + ' — ' + (STATE.site.conc || STATE.site.nuts)
-    : APP.name + (LANG === 'pt' ? ' — Desenho da envolvente pelo SCE' : ' — SCE Envelope Designer');
+  document.title = STATE.site ? APP.tabName + ' — ' + (STATE.site.conc || STATE.site.nuts)
+    : APP.tabName + (LANG === 'pt' ? ' — Desenho da envolvente pelo SCE' : ' — SCE Envelope Designer');
   if (STATE.site) mountApp(STATE.site, STATE.tab);      // rebuild every page in the new language
 }
 $$('#langsel button').forEach(b => b.addEventListener('click', () => setLanguage(b.dataset.lang)));
@@ -5429,7 +5577,6 @@ initSetup();
 /* --- the static markup of the page, keyed by data-t --------------------- */
 Object.assign(STATIC_PT, {
   brandsub: 'Desenho da envolvente pelo SCE',
-  btnReload: 'Mudar de local',
   setupTitle: 'Onde vai construir?',
   setupBody: 'A regulamentação térmica portuguesa classifica um local a partir de apenas duas coisas: a região <b>NUTS III</b> em que se insere e a sua <b>altitude</b>. Todos os parâmetros de referência estão tabelados para uma altitude de referência e são corrigidos linearmente a partir dela. Indique o concelho e a cota acima do nível do mar e esta aplicação resolve as zonas de Inverno e de Verão, percorrendo depois a envolvente elemento a elemento — coberturas, pavimentos, paredes, vãos e sombreamento — perante os limites efectivamente em vigor.',
   fldConc: 'Concelho',
@@ -5447,6 +5594,9 @@ Object.assign(STATIC_PT, {
   opRenovation: 'Grande intervenção',
   fldOpSub: 'Nenhum limite varia com a sua resposta — a Portaria enuncia todas as exigências abaixo para "edifícios novos ou renovados" em conjunto. O que varia é o que se mostra: as constituições por defeito de um elemento que já existe só aparecem numa grande intervenção.',
   btnGo: 'Percorrer a envolvente',
+  btnLoadSetup: 'Continuar uma avaliação guardada',
+  btnSave: 'Guardar',
+  btnRestart: 'Recomeçar',
   ex1h: 'Fundado na regulamentação e não numa regra prática',
   ex1p: 'Clima de referência por NUTS III e os seus declives em altitude, coeficientes de transmissão térmica máximos por zona e região, fator solar admissível por inércia, coeficientes de pavimentos térreos por dimensão característica — lidos no Manual SCE e na Portaria, e citados onde são usados.',
   ex2h: 'Componha o elemento, leia o número',
@@ -6059,6 +6209,15 @@ Object.assign(PT, {
   "Export the underlying numbers as CSV": "Exportar os números subjacentes em CSV",
   "Export this chart as a PNG image at {}× resolution": "Exportar este gráfico como imagem PNG a {}× de resolução",
   "CSV exported": "CSV exportado",
+  "Nothing to save yet": "Ainda não há nada para guardar",
+  "Progress saved": "Progresso guardado",
+  "That file could not be read": "Não foi possível ler esse ficheiro",
+  "That is not a Construction Advisor file": "Isso não parece ser um ficheiro do Construction Advisor",
+  "That file is missing information this needs": "Falta a esse ficheiro informação de que isto precisa",
+  "Progress restored": "Progresso restaurado",
+  "Assessment reset": "Avaliação reiniciada",
+  "Discard the current assessment and start over?":
+    "Descartar a avaliação actual e recomeçar?",
   "PNG exported at {} × {} px": "PNG exportado a {} × {} px",
   "Nothing to export yet — open the chart first": "Ainda não há nada para exportar — abra primeiro o gráfico",
   "That region is not in the table": "Essa região não consta da tabela",
