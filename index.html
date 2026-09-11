@@ -249,6 +249,11 @@ abbr.gl:focus{box-shadow:0 0 0 2px #cfd8ea}
 }
 .sechead h3{font-size:14px}
 .sechead span{font-size:11.5px; color:var(--muted)}
+.sechead-src{
+  font-size:11.5px; color:var(--muted); text-decoration:none;
+  border-bottom:1px dotted var(--faint);
+}
+.sechead-src:hover,.sechead-src:focus{color:var(--c1); border-bottom-color:var(--c1)}
 #toast{
   position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(14px);
   background:var(--ink); color:#fff; font-size:12.5px; padding:9px 15px; border-radius:7px;
@@ -548,7 +553,7 @@ footer{border-top:1px solid var(--line); margin-top:26px; background:var(--wash)
 const APP = {
   name:        'Construction Advisor',
   tabName:     'CA App',   // short name for the browser tab, which truncates the full one
-  version:     '1.3.0',
+  version:     '1.4.0',
   author:      'Nuno Dinis Cortiços',
   institution: 'Lisbon School of Architecture, Universidade de Lisboa',
   builtWith:   'Claude Opus 5 (Anthropic)',
@@ -1068,8 +1073,35 @@ function rangeCtl(labelText, min, max, step, value, onchange, fmtFn) {
   wrap.range = r; wrap.out = out;        // so callers can reset the value programmatically
   return wrap;
 }
+/**
+ * A citation this application can point at a live copy of, matched by
+ * substring against the note text every section already carries — so
+ * making a table's own citation clickable needed no change at any of its
+ * roughly forty call sites, only here. Where a note names more than one
+ * source ("Portaria Tabela 8 and Manual SCE Tabela 48"), whichever is named
+ * first in the sentence is the one linked.
+ */
+const SOURCE_LINKS = [
+  ['Manual SCE', 'https://www.sce.pt/wp-content/uploads/2021/07/Manual-SCE.pdf'],
+  ['Portaria',   'https://files.diariodarepublica.pt/1s/2021/07/12602/0001200053.pdf'],
+  ['EN ISO 13788', 'https://www.iso.org/standard/51615.html']
+];
+function sourceLinkFor(note) {
+  if (!note) return null;
+  let best = null, bestAt = Infinity;
+  SOURCE_LINKS.forEach(([key, url]) => {
+    const at = note.indexOf(key);
+    if (at >= 0 && at < bestAt) { bestAt = at; best = url; }
+  });
+  return best;
+}
 function sectionHead(title, note) {
-  return el('div', { class:'sechead' }, [ el('h3', { text:title }), note ? el('span', { text:note }) : null ]);
+  const url = note && sourceLinkFor(note);
+  const noteNode = !note ? null
+    : url ? el('a', { class:'sechead-src', href:url, target:'_blank', rel:'noopener noreferrer', text:note,
+                       title:'Open the source this is drawn from' })
+          : el('span', { text:note });
+  return el('div', { class:'sechead' }, [ el('h3', { text:title }), noteNode ]);
 }
 /**
  * A Portuguese spreadsheet expects the semicolon as list separator and the
@@ -5200,29 +5232,41 @@ const TABS = [
 /* --- the references, built from one list so the footer and the pages agree - */
 const REFS = [
   ['Portugal. (2020). <i>Decreto-Lei n.º 101-D/2020, de 7 de dezembro</i>, as amended by <i>Decreto-Lei n.º 11/2025, de 19 de fevereiro</i>. Diário da República, 1.ª série.',
-   'Energy performance of buildings and the SCE. Repeals the framework of Decreto-Lei n.º 118/2013, which had itself revoked the RCCTE.', 'https://www.sce.pt/legislacao/'],
+   'Energy performance of buildings and the SCE. Repeals the framework of Decreto-Lei n.º 118/2013, which had itself revoked the RCCTE.',
+   'https://diariodarepublica.pt/dr/legislacao-consolidada/decreto-lei/2020-150571263-150661219'],
   ['Portugal. (2021). <i>Portaria n.º 138-I/2021, de 1 de julho</i>. Diário da República, 1.ª série, n.º 126, 2.º suplemento.',
-   'Maximum thermal transmittance by winter zone and region (Anexo I, Tabelas 1 to 3 and 6); maximum admissible solar factor by summer zone and inertia (Anexo I, Tabela 8); minimum new-air flow for dwellings and for commerce and services (Anexo II, Tabelas 10 to 13).', 'https://www.sce.pt/legislacao/'],
+   'Maximum thermal transmittance by winter zone and region (Anexo I, Tabelas 1 to 3 and 6); maximum admissible solar factor by summer zone and inertia (Anexo I, Tabela 8); minimum new-air flow for dwellings and for commerce and services (Anexo II, Tabelas 10 to 13).',
+   'https://files.diariodarepublica.pt/1s/2021/07/12602/0001200053.pdf'],
   ['Portugal. (2018). <i>Decreto-Lei n.º 108/2018, de 3 de dezembro</i>, transposing Directive 2013/59/Euratom. Diário da República, 1.ª série.',
-   'A separate regime from the SCE: the 300 Bq/m³ indoor radon reference level and the priority areas it defines, cited only as an awareness note on a sealed unheated space — this application carries none of its data.', null],
+   'A separate regime from the SCE: the 300 Bq/m³ indoor radon reference level and the priority areas it defines, cited only as an awareness note on a sealed unheated space — this application carries none of its data.',
+   'https://diariodarepublica.pt/dr/legislacao-consolidada/decreto-lei/2018-117202808-117211193'],
   ['Direção-Geral de Energia e Geologia. (2021). <i>Manual SCE — Manual técnico para a avaliação do desempenho energético dos edifícios</i> (v1.0), approved by Despacho n.º 6476-H/2021, de 1 de julho.',
-   'Climate zoning and the altitude correction (Eq. 2, Tabelas 7 to 10); reduction coefficient of unheated spaces (Tabela 16); material characterisation (Tabela 19); solar absorptance (Tabela 20); surface and air-space resistances (Tabelas 23 and 24); default transmittances (Tabelas 25 and 26); ground floors (Tabelas 27 and 28, Eq. 9); thermal inertia (Tabelas 35 and 40, Eq. 11); glazed openings (Tabelas 45, 47 and 48); orientation factor (Tabela 52); shading factors (Tabelas 54 to 57, Eq. 34); indoor air quality (Tabelas 67, 69 to 71 and 73, Eqs. 51 to 56).', 'https://www.sce.pt/legislacao/'],
+   'Climate zoning and the altitude correction (Eq. 2, Tabelas 7 to 10); reduction coefficient of unheated spaces (Tabela 16); material characterisation (Tabela 19); solar absorptance (Tabela 20); surface and air-space resistances (Tabelas 23 and 24); default transmittances (Tabelas 25 and 26); ground floors (Tabelas 27 and 28, Eq. 9); thermal inertia (Tabelas 35 and 40, Eq. 11); glazed openings (Tabelas 45, 47 and 48); orientation factor (Tabela 52); shading factors (Tabelas 54 to 57, Eq. 34); indoor air quality (Tabelas 67, 69 to 71 and 73, Eqs. 51 to 56).',
+   'https://www.sce.pt/wp-content/uploads/2021/07/Manual-SCE.pdf'],
   ['Laboratório Nacional de Engenharia Civil. <i>ITE 50 — Coeficientes de transmissão térmica de elementos da envolvente dos edifícios</i>.',
-   'Thermal conductivity and density of the materials library, which the Manual SCE names as the reference source above default values.', null],
+   'Thermal conductivity and density of the materials library, which the Manual SCE names as the reference source above default values.',
+   'https://www.lnec.pt/services/livraria'],
   ['Gonçalves, H., &amp; Mariz Graça, J. (2004). <i>Conceitos bioclimáticos para os edifícios em Portugal</i>. DGGE/IP-3E.',
-   'The character of each winter–summer zone pair and the strategies that follow from it. Its zone names survive in current practice; its thresholds do not.', null],
+   'The character of each winter–summer zone pair and the strategies that follow from it. Its zone names survive in current practice; its thresholds do not.',
+   'https://energiasrenovaveis.com/images/upload/Conceitos_bioclimaticos.pdf'],
   ['Olgyay, V. (1963). <i>Design with climate: Bioclimatic approach to architectural regionalism</i>. Princeton University Press.',
-   'The shading-mask method, and the reading of a device as a geometry before it is a coefficient.', null],
+   'The shading-mask method, and the reading of a device as a geometry before it is a coefficient.',
+   'https://press.princeton.edu/books/paperback/9780691169736/design-with-climate'],
   ['Brophy, V., &amp; Lewis, J. O. (2011). <i>A Green Vitruvius: Principles and practice of sustainable architectural design</i> (2nd ed.). Earthscan.',
-   'Glazing strategy and the reading of an envelope as a whole.', null],
+   'Glazing strategy and the reading of an envelope as a whole.',
+   'https://www.routledge.com/A-Green-Vitruvius-Principles-and-Practice-of-Sustainable-Architectural-Design/Brophy-Lewis/p/book/9781849711913'],
   ['European Committee for Standardization. (2011). <i>Glass in building — Determination of luminous and solar characteristics of glazing</i> (EN 410:2011).',
-   'The definition of light transmission and solar factor that the glazing table reports.', null],
+   'The definition of light transmission and solar factor that the glazing table reports.',
+   'https://knowledge.bsigroup.com/products/glass-in-building-determination-of-luminous-and-solar-characteristics-of-glazing'],
   ['European Committee for Standardization. (2012). <i>Hygrothermal performance of building components and building elements — Internal surface temperature to avoid critical surface humidity and interstitial condensation — Calculation methods</i> (EN ISO 13788:2012).',
-   'The Glaser method drawn on the external-wall page: the steady-state comparison of the vapour-pressure profile against saturation, and the saturation-pressure expressions of its Annex E. A screening method by its own account, run here on generic vapour-resistance factors rather than declared product data.', null],
-  ['International Organization for Standardization. (2017). <i>Thermal insulation — Building elements — In-situ measurement of thermal resistance and thermal transmittance</i> (ISO 9869).',
-   'In-situ measurement, which the Manual SCE admits as evidence of an existing build-up.', null],
+   'The Glaser method drawn on the external-wall page: the steady-state comparison of the vapour-pressure profile against saturation, and the saturation-pressure expressions of its Annex E. A screening method by its own account, run here on generic vapour-resistance factors rather than declared product data.',
+   'https://www.iso.org/standard/51615.html'],
+  ['International Organization for Standardization. (2014). <i>Thermal insulation — Building elements — In-situ measurement of thermal resistance and thermal transmittance</i> — Part 1: Heat flow meter method (ISO 9869-1:2014).',
+   'In-situ measurement, which the Manual SCE admits as evidence of an existing build-up.',
+   'https://www.iso.org/standard/59697.html'],
   ['European Committee for Standardization. (2019). <i>Energy performance of buildings — Ventilation for buildings — Part 1: Indoor environmental input parameters for design and assessment of energy performance of buildings addressing indoor air quality, thermal environment, lighting and acoustics</i> (EN 16798-1:2019).',
-   'Minimum hourly air-change rate for dwellings; the compliance route for a facade opening added on a minor glazing renewal.', null],
+   'Minimum hourly air-change rate for dwellings; the compliance route for a facade opening added on a minor glazing renewal.',
+   'https://epb.center/document/en-16798-1/'],
   ['Direção-Geral do Território / Ministério da Coesão Territorial. <i>Altitude mínima</i> and <i>Altitude máxima</i>, by município (2025), published via PORDATA, Fundação Francisco Manuel dos Santos.',
    'Not an SCE quantity — carried only as a plausibility check on the site altitude a student enters, against the lowest and highest ground the municipality itself actually reaches.', 'https://www.pordata.pt/municipios']
 ];
@@ -5230,9 +5274,14 @@ function buildRefs() {
   const ul = $('#refList');
   if (!ul) return;
   ul.innerHTML = '';
-  REFS.forEach(r => ul.appendChild(el('li', { html:
-    r[0] + (r[2] ? ' <a href="' + r[2] + '" target="_blank" rel="noopener noreferrer">sce.pt</a>' : '')
-    + ' <span style="color:var(--faint)">' + t(r[1]) + '</span>' })));
+  REFS.forEach(r => {
+    let link = '';
+    if (r[2]) {
+      let host; try { host = new URL(r[2]).hostname.replace(/^www\./, ''); } catch (e) { host = 'source'; }
+      link = ' <a href="' + r[2] + '" target="_blank" rel="noopener noreferrer">' + host + '</a>';
+    }
+    ul.appendChild(el('li', { html: r[0] + link + ' <span style="color:var(--faint)">' + t(r[1]) + '</span>' }));
+  });
 }
 
 /* --- the setup screen ------------------------------------------------------ */
